@@ -64,13 +64,13 @@ def create_redis_client(host, port, username, password, ssl, is_cluster):
         raise
 
 
-def count_rl_counters(r, pattern):
+def count_rl_counters(r, scan_pattern):
     total_count = 0
     oldest_windows = {}
-    pattern = re.compile(r"(\d+):\d+:(.*)")
+    key_regex = re.compile(r"(\d+):\d+:(.*)")
 
-    for key in r.scan_iter(pattern):
-        match = pattern.match(key)
+    for key in r.scan_iter(match=scan_pattern):
+        match = key_regex.match(key)
         if match:
             timestamp, uuid = match.groups()
             timestamp = int(timestamp)
@@ -85,22 +85,22 @@ def count_rl_counters(r, pattern):
     return total_count
 
 
-def collect_metrics(redis_client, pattern):
+def collect_metrics(redis_client, scan_pattern):
     try:
-        total_count = count_rl_counters(redis_client, pattern)
-        rate_limiting_total_requests.set(total_count)
+        total_count = count_rl_counters(redis_client, scan_pattern)
+        rate_limiting_total_requests.labels(pattern=scan_pattern).set(total_count)
         logging.info(f"Updated rate limiting total requests metric: {total_count}")
     except Exception as e:
         logging.error(f"Error collecting metrics: {e}")
 
 
-def main(r, port):
+def main(r, port, scan_pattern):
     # Start up the server to expose the metrics.
     start_http_server(port)
     logging.info(f"Prometheus metrics server started on port {port}")
     while not shutdown_flag:
-        collect_metrics(r, pattern)
-        time.sleep(1)
+        collect_metrics(r, scan_pattern)
+        time.sleep(5)
     logging.info("Metrics collection stopped.")
 
 
@@ -166,6 +166,6 @@ if __name__ == "__main__":
             ssl=args.ssl,
             is_cluster=args.cluster,
         )
-        main(redis_client, args.metric_port)
+        main(redis_client, args.metric_port, args.key_pattern)
     except Exception as e:
         logging.error(f"Exporter failed to start: {e}")
