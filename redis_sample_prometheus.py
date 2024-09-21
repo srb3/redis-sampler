@@ -13,11 +13,17 @@ logging.basicConfig(
     handlers=[logging.StreamHandler()],
 )
 
-# Prometheus Gauge
+# Prometheus Gauges
 rate_limiting_total_requests = Gauge(
     "rate_limiting_total_requests",
     "Total requests for rate limiting with pattern",
     ["pattern"],
+)
+
+rate_limiting_window_requests = Gauge(
+    "rate_limiting_window_requests",
+    "Requests for specific rate limiting window",
+    ["pattern", "window_size", "uuid", "identifier"],
 )
 
 shutdown_flag = False
@@ -65,31 +71,58 @@ def create_redis_client(host, port, username, password, ssl, is_cluster):
 
 
 def count_rl_counters(r, scan_pattern):
-    total_count = 0
     oldest_windows = {}
-    key_regex = re.compile(r"(\d+):\d+:(.*)")
+    key_regex = re.compile(r"(\d+):(\d+):(.*)")
 
+    # First pass: find the oldest window for each window_size-uuid combination
     for key in r.scan_iter(match=scan_pattern):
         match = key_regex.match(key)
         if match:
-            timestamp, uuid = match.groups()
+            timestamp, window_size, uuid = match.groups()
             timestamp = int(timestamp)
-            if uuid not in oldest_windows or timestamp < oldest_windows[uuid][0]:
-                oldest_windows[uuid] = (timestamp, key)
+            identifier = f"{window_size}-{uuid}"
 
-    for _, key in oldest_windows.values():
+            if (
+                identifier not in oldest_windows
+                or timestamp < oldest_windows[identifier][0]
+            ):
+                oldest_windows[identifier] = (timestamp, key)
+
+    # Second pass: count the values for the oldest windows
+    total_count = 0
+    window_counts = {}
+    for identifier, (_, key) in oldest_windows.items():
+        window_size, uuid = identifier.split("-")
         hash_entries = r.hgetall(key)
-        for value in hash_entries.values():
-            total_count += int(value)
+        window_total = sum(int(value) for value in hash_entries.values())
 
-    return total_count
+        window_counts[identifier] = window_total
+        total_count += window_total
+
+    return total_count, window_counts
 
 
 def collect_metrics(redis_client, scan_pattern):
     try:
-        total_count = count_rl_counters(redis_client, scan_pattern)
+        total_count, window_counts = count_rl_counters(redis_client, scan_pattern)
+
+        # Update total requests metric
         rate_limiting_total_requests.labels(pattern=scan_pattern).set(total_count)
         logging.info(f"Updated rate limiting total requests metric: {total_count}")
+
+        # Update individual window metrics
+        for identifier, count in window_counts.items():
+            window_size, uuid = identifier.split("-")
+            rate_limiting_window_requests.labels(
+                pattern=scan_pattern,
+                window_size=window_size,
+                uuid=uuid,
+                identifier=identifier,
+            ).set(count)
+            logging.info(
+                f"Updated rate limiting window requests metric: {identifier} = {count}"
+            )
+
     except Exception as e:
         logging.error(f"Error collecting metrics: {e}")
 
