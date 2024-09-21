@@ -13,9 +13,7 @@ class TestPrometheusExporter(unittest.TestCase):
 
     def test_count_rl_counters_empty(self):
         self.mock_redis.scan_iter.return_value = []
-        total_count, window_counts = count_rl_counters(
-            self.mock_redis, "test_pattern:*"
-        )
+        total_count, window_counts = count_rl_counters(self.mock_redis)
         self.assertEqual(total_count, 0)
         self.assertEqual(window_counts, {})
 
@@ -23,9 +21,7 @@ class TestPrometheusExporter(unittest.TestCase):
         self.mock_redis.scan_iter.return_value = ["1000:60:abc123"]
         self.mock_redis.hgetall.return_value = {"field1": "5", "field2": "10"}
 
-        total_count, window_counts = count_rl_counters(
-            self.mock_redis, "test_pattern:*"
-        )
+        total_count, window_counts = count_rl_counters(self.mock_redis)
 
         self.assertEqual(total_count, 15)
         self.assertEqual(window_counts, {"60-abc123": 15})
@@ -41,9 +37,7 @@ class TestPrometheusExporter(unittest.TestCase):
             {"field1": "15", "field2": "20"},  # For 120:def456
         ]
 
-        total_count, window_counts = count_rl_counters(
-            self.mock_redis, "test_pattern:*"
-        )
+        total_count, window_counts = count_rl_counters(self.mock_redis)
 
         self.assertEqual(total_count, 50)
         self.assertEqual(window_counts, {"60-abc123": 15, "120-def456": 35})
@@ -58,20 +52,20 @@ class TestPrometheusExporter(unittest.TestCase):
             {"field1": "15", "field2": "20"},
         ]
 
-        collect_metrics(mock_redis, "test_pattern:*")
+        collect_metrics(mock_redis, "redis-instance1")
 
-        mock_total_requests.labels.assert_called_once_with(pattern="test_pattern:*")
+        mock_total_requests.labels.assert_called_once_with(instance="redis-instance1")
         mock_total_requests.labels().set.assert_called_once_with(50)
 
         self.assertEqual(mock_window_requests.labels.call_count, 2)
         mock_window_requests.labels.assert_any_call(
-            pattern="test_pattern:*",
+            instance="redis-instance1",
             window_size="60",
             uuid="abc123",
             identifier="60-abc123",
         )
         mock_window_requests.labels.assert_any_call(
-            pattern="test_pattern:*",
+            instance="redis-instance1",
             window_size="120",
             uuid="def456",
             identifier="120-def456",

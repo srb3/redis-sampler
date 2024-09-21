@@ -15,24 +15,16 @@ logging.basicConfig(
 
 # Prometheus Gauges
 rate_limiting_total_requests = Gauge(
-    "rate_limiting_total_requests",
-    "Total requests for rate limiting with pattern",
-    ["pattern"],
+    "rate_limiting_total_requests", "Total requests for rate limiting", ["instance"]
 )
 
 rate_limiting_window_requests = Gauge(
     "rate_limiting_window_requests",
     "Requests for specific rate limiting window",
-    ["pattern", "window_size", "uuid", "identifier"],
+    ["instance", "window_size", "uuid", "identifier"],
 )
 
 shutdown_flag = False
-
-
-def signal_handler(sig, frame):
-    global shutdown_flag
-    logging.info("Shutdown signal received. Exiting gracefully...")
-    shutdown_flag = True
 
 
 def create_redis_client(host, port, username, password, ssl, is_cluster):
@@ -70,12 +62,12 @@ def create_redis_client(host, port, username, password, ssl, is_cluster):
         raise
 
 
-def count_rl_counters(r, scan_pattern):
+def count_rl_counters(r):
     oldest_windows = {}
     key_regex = re.compile(r"(\d+):(\d+):(.*)")
 
     # First pass: find the oldest window for each window_size-uuid combination
-    for key in r.scan_iter(match=scan_pattern):
+    for key in r.scan_iter(match="*:*:*"):  # Match any key with two colons
         match = key_regex.match(key)
         if match:
             timestamp, window_size, uuid = match.groups()
@@ -102,37 +94,39 @@ def count_rl_counters(r, scan_pattern):
     return total_count, window_counts
 
 
-def collect_metrics(redis_client, scan_pattern):
+def collect_metrics(redis_client, instance):
     try:
-        total_count, window_counts = count_rl_counters(redis_client, scan_pattern)
+        total_count, window_counts = count_rl_counters(redis_client)
 
         # Update total requests metric
-        rate_limiting_total_requests.labels(pattern=scan_pattern).set(total_count)
-        logging.info(f"Updated rate limiting total requests metric: {total_count}")
+        rate_limiting_total_requests.labels(instance=instance).set(total_count)
+        logging.info(
+            f"Updated rate limiting total requests metric for {instance}: {total_count}"
+        )
 
         # Update individual window metrics
         for identifier, count in window_counts.items():
             window_size, uuid = identifier.split("-")
             rate_limiting_window_requests.labels(
-                pattern=scan_pattern,
+                instance=instance,
                 window_size=window_size,
                 uuid=uuid,
                 identifier=identifier,
             ).set(count)
             logging.info(
-                f"Updated rate limiting window requests metric: {identifier} = {count}"
+                f"Updated rate limiting window requests metric for {instance}: {identifier} = {count}"
             )
 
     except Exception as e:
         logging.error(f"Error collecting metrics: {e}")
 
 
-def main(r, port, scan_pattern):
+def main(r, port, host):
     # Start up the server to expose the metrics.
     start_http_server(port)
     logging.info(f"Prometheus metrics server started on port {port}")
     while not shutdown_flag:
-        collect_metrics(r, scan_pattern)
+        collect_metrics(r, host)
         time.sleep(5)
     logging.info("Metrics collection stopped.")
 
@@ -140,12 +134,6 @@ def main(r, port, scan_pattern):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Prometheus exporter for Redis rate limiting counters"
-    )
-    parser.add_argument(
-        "--key-pattern",
-        type=str,
-        required=True,
-        help="Pattern to match keys in Redis.",
     )
     parser.add_argument(
         "--metric-port",
@@ -199,6 +187,6 @@ if __name__ == "__main__":
             ssl=args.ssl,
             is_cluster=args.cluster,
         )
-        main(redis_client, args.metric_port, args.key_pattern)
+        main(redis_client, args.metric_port, args.host)
     except Exception as e:
         logging.error(f"Exporter failed to start: {e}")
