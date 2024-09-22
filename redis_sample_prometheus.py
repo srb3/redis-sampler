@@ -106,7 +106,7 @@ def collect_metrics(redis_client, instance):
 
         # Update individual window metrics
         for identifier, count in window_counts.items():
-            window_size, uuid = identifier.split("-")
+            window_size, uuid = identifier.split("-", 1)
             rate_limiting_window_requests.labels(
                 instance=instance,
                 window_size=window_size,
