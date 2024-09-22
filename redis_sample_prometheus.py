@@ -84,7 +84,7 @@ def count_rl_counters(r):
     total_count = 0
     window_counts = {}
     for identifier, (_, key) in oldest_windows.items():
-        window_size, uuid = identifier.split("-")
+        window_size, uuid = identifier.split("-", 1)
         hash_entries = r.hgetall(key)
         window_total = sum(int(value) for value in hash_entries.values())
 
