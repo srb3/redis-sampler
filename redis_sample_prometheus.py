@@ -66,7 +66,7 @@ def create_redis_client(host, port, username, password, ssl, is_cluster):
         raise
 
 
-def count_rl_counters(r):
+def count_rl_counters(r, keep_zero):
     global previous_window_counts
     current_window_counts = {}
     oldest_windows = {}
@@ -100,7 +100,9 @@ def count_rl_counters(r):
     expired_counters = []
     for identifier, (count, last_seen) in previous_window_counts.items():
         if identifier not in current_window_counts:
-            if current_time - last_seen <= 5:  # Keep zero value for 5 seconds
+            if (
+                current_time - last_seen <= keep_zero
+            ):  # Keep zero value for 30 seconds (default)
                 current_window_counts[identifier] = (0, last_seen)
             else:
                 expired_counters.append(identifier)
@@ -115,9 +117,9 @@ def count_rl_counters(r):
     return total_count, current_window_counts
 
 
-def collect_metrics(redis_client, instance):
+def collect_metrics(redis_client, instance, keep_zero):
     try:
-        total_count, window_counts = count_rl_counters(redis_client)
+        total_count, window_counts = count_rl_counters(redis_client, keep_zero)
 
         # Update total requests metric
         rate_limiting_total_requests.labels(instance=instance).set(total_count)
@@ -142,12 +144,12 @@ def collect_metrics(redis_client, instance):
         logging.error(f"Error collecting metrics: {e}")
 
 
-def main(r, port, host):
+def main(r, port, host, keep_zero):
     # Start up the server to expose the metrics.
     start_http_server(port)
     logging.info(f"Prometheus metrics server started on port {port}")
     while not shutdown_flag:
-        collect_metrics(r, host)
+        collect_metrics(r, host, keep_zero)
         time.sleep(5)
     logging.info("Metrics collection stopped.")
 
@@ -196,7 +198,12 @@ if __name__ == "__main__":
         action="store_true",
         help="Connect to a Redis Cluster",
     )
-
+    parser.add_argument(
+        "--keep-zero",
+        type=int,
+        default=30,
+        help="Keep zero value for expired counters for this many seconds",
+    )
     args = parser.parse_args()
 
     try:
@@ -208,6 +215,6 @@ if __name__ == "__main__":
             ssl=args.ssl,
             is_cluster=args.cluster,
         )
-        main(redis_client, args.metric_port, args.host)
+        main(redis_client, args.metric_port, args.host, args.keep_zero)
     except Exception as e:
         logging.error(f"Exporter failed to start: {e}")
