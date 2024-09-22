@@ -2,6 +2,7 @@ import time
 import re
 import argparse
 import logging
+from typing import Dict, Tuple
 import redis
 from redis.cluster import RedisCluster, ClusterNode
 from prometheus_client import start_http_server, Gauge
@@ -25,6 +26,9 @@ rate_limiting_window_requests = Gauge(
 )
 
 shutdown_flag = False
+
+# Global variable to store the previous window counts and their last seen timestamps
+previous_window_counts: Dict[str, Tuple[int, float]] = {}
 
 
 def create_redis_client(host, port, username, password, ssl, is_cluster):
@@ -63,8 +67,11 @@ def create_redis_client(host, port, username, password, ssl, is_cluster):
 
 
 def count_rl_counters(r):
+    global previous_window_counts
+    current_window_counts = {}
     oldest_windows = {}
     key_regex = re.compile(r"(\d+):(\d+):(.*)")
+    current_time = time.time()
 
     # First pass: find the oldest window for each window_size-uuid combination
     for key in r.scan_iter(match="*:*:*"):  # Match any key with two colons
@@ -82,16 +89,30 @@ def count_rl_counters(r):
 
     # Second pass: count the values for the oldest windows
     total_count = 0
-    window_counts = {}
     for identifier, (_, key) in oldest_windows.items():
-        window_size, uuid = identifier.split("-", 1)
         hash_entries = r.hgetall(key)
         window_total = sum(int(value) for value in hash_entries.values())
 
-        window_counts[identifier] = window_total
+        current_window_counts[identifier] = (window_total, current_time)
         total_count += window_total
 
-    return total_count, window_counts
+    # Check for expired counters and set them to zero
+    expired_counters = []
+    for identifier, (count, last_seen) in previous_window_counts.items():
+        if identifier not in current_window_counts:
+            if current_time - last_seen <= 5:  # Keep zero value for 5 seconds
+                current_window_counts[identifier] = (0, last_seen)
+            else:
+                expired_counters.append(identifier)
+
+    # Remove expired counters
+    for identifier in expired_counters:
+        del previous_window_counts[identifier]
+
+    # Update the previous_window_counts for the next iteration
+    previous_window_counts = current_window_counts.copy()
+
+    return total_count, current_window_counts
 
 
 def collect_metrics(redis_client, instance):
@@ -105,7 +126,7 @@ def collect_metrics(redis_client, instance):
         )
 
         # Update individual window metrics
-        for identifier, count in window_counts.items():
+        for identifier, (count, _) in window_counts.items():
             window_size, uuid = identifier.split("-", 1)
             rate_limiting_window_requests.labels(
                 instance=instance,
