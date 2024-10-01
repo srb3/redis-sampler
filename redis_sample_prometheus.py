@@ -144,13 +144,13 @@ def collect_metrics(redis_client, instance, keep_zero):
         logging.error(f"Error collecting metrics: {e}")
 
 
-def main(r, port, host, keep_zero):
+def main(r, port, host, keep_zero, sleep_time=5):
     # Start up the server to expose the metrics.
     start_http_server(port)
     logging.info(f"Prometheus metrics server started on port {port}")
     while not shutdown_flag:
         collect_metrics(r, host, keep_zero)
-        time.sleep(5)
+        time.sleep(sleep_time)
     logging.info("Metrics collection stopped.")
 
 
@@ -204,6 +204,12 @@ if __name__ == "__main__":
         default=30,
         help="Keep zero value for expired counters for this many seconds",
     )
+    parser.add_argument(
+        "--sleep-time",
+        type=int,
+        default=5,
+        help="Time to sleep between metric collections",
+    )
     args = parser.parse_args()
 
     try:
@@ -215,6 +221,6 @@ if __name__ == "__main__":
             ssl=args.ssl,
             is_cluster=args.cluster,
         )
-        main(redis_client, args.metric_port, args.host, args.keep_zero)
+        main(redis_client, args.metric_port, args.host, args.keep_zero, args.sleep_time)
     except Exception as e:
         logging.error(f"Exporter failed to start: {e}")
